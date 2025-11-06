@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------
-// 文件: 30ver.js (完整代码)
+// 文件: 30ver.js (完整代码，包含后置摄像头约束)
 // -------------------------------------------------------------------
 
 // --- 全局变量 ---
@@ -57,10 +57,8 @@ function getFreqFromMidi(midiNote) {
     return 440 * Math.pow(2, (midiNote - 69) / 12);
 }
 
-// 重新引入精确的数组比较函数，用于判断和弦是否发生变化
 function arraysEqual(a, b) {
     if (a.length !== b.length) return false;
-    // 必须排序后比较，因为检测顺序可能不同
     const sortedA = [...a].sort((x, y) => x - y);
     const sortedB = [...b].sort((x, y) => x - y);
     for (let i = 0; i < a.length; i++) {
@@ -77,7 +75,6 @@ function createGridMap(canvasHeight) {
     const pitchMap = {};
     const gridLines = [];
     
-    // 遍历 TARGET_NOTES，按顺序从上到下生成格子
     for (let i = 0; i < NUM_STEPS; i++) {
         const note = TARGET_NOTES[i];
         const center_y = margin + (i * stepHeight) + (stepHeight / 2);
@@ -106,10 +103,9 @@ function createGridMap(canvasHeight) {
 function onOpenCvLoaded() {
     statusElement.innerHTML = 'OpenCV 加载完毕，请点击开始按钮。';
     
-    // 初始化按钮状态并添加监听器
     if (startButton && stopButton) {
         startButton.disabled = false;
-        stopButton.disabled = true; // 初始禁用停止按钮
+        stopButton.disabled = true; 
         startButton.addEventListener('click', initCameraAndAudio);
         stopButton.addEventListener('click', stopProcessing);
     } else {
@@ -127,7 +123,13 @@ function initCameraAndAudio() {
 
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-    navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+    // 🌟 关键修改：指定 video 约束，要求使用后置摄像头
+    navigator.mediaDevices.getUserMedia({ 
+        video: { 
+            facingMode: { exact: "environment" } // 明确要求使用环境摄像头 (后置)
+        }, 
+        audio: false 
+    })
         .then(function(stream) {
             videoStream = stream; // 存储媒体流
             video.srcObject = stream;
@@ -145,7 +147,6 @@ function initCameraAndAudio() {
                 statusElement.innerHTML = '摄像头就绪，开始识别...';
                 isProcessing = true;
                 
-                // 成功后启用停止按钮
                 startButton.disabled = true;
                 stopButton.disabled = false; 
                 
@@ -154,9 +155,10 @@ function initCameraAndAudio() {
         })
         .catch(function(err) {
             statusElement.innerHTML = '无法获取摄像头: ' + err;
-            // 失败后恢复开始按钮
+            // 如果后置摄像头获取失败，这里会捕获错误
             startButton.disabled = false;
             stopButton.disabled = true;
+            // 可以在这里添加尝试获取前置摄像头的逻辑作为后备方案
         });
 }
 
@@ -166,12 +168,10 @@ function stopProcessing() {
     isProcessing = false;
     statusElement.innerHTML = '扫描已停止。';
     
-    // 状态转换：启用开始，禁用停止
     startButton.disabled = false;
     stopButton.disabled = true;
     lastDetectedPitches = []; 
     
-    // 停止摄像头轨道
     if (videoStream) {
         const tracks = videoStream.getTracks();
         tracks.forEach(track => track.stop());
@@ -179,14 +179,11 @@ function stopProcessing() {
         videoStream = null;
     }
 
-    // 清空画布显示
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
-    // 清理 OpenCV 内存
     if (cap) { cap.delete(); cap = null; }
     if (src) { src.delete(); src = null; }
 
-    // 关闭 AudioContext
     if (audioCtx) {
         audioCtx.close().then(() => {
             audioCtx = null;
@@ -269,7 +266,6 @@ function processVideo() {
         let contour = contours.get(i);
         let area = cv.contourArea(contour);
 
-        // 面积过滤
         if (area > 100 && area < 4000) { 
             let rect = cv.boundingRect(contour);
             let center_x = rect.x + rect.width / 2;
@@ -278,7 +274,6 @@ function processVideo() {
             if (center_x >= ROI_X && center_x <= ROI_X + ROI_W) {
                 cv.circle(cap, new cv.Point(center_x, center_y), 5, [0, 0, 255, 255], -1); 
 
-                // 6. 精确坐标转音高
                 for (const key in PITCH_MAP) {
                     const pitchInfo = PITCH_MAP[key];
                     if (center_y >= pitchInfo.minY && center_y < pitchInfo.maxY) {
