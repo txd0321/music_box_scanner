@@ -1,80 +1,99 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
-    <title>八音盒谱子识别原型 (JS)</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>八音盒谱子实时扫描</title>
+    <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvLoaded();"></script>
     <style>
-        body { 
-            margin: 0; 
-            padding: 20px;
-            text-align: center; 
-            font-family: sans-serif; 
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
             display: flex;
             flex-direction: column;
             align-items: center;
-            background-color: #f4f4f4;
+            justify-content: flex-start; /* 顶部对齐 */
+            min-height: 100vh;
+            background-color: #f0f0f0;
+            color: #333;
+            overflow-x: hidden; /* 防止水平滚动 */
         }
-        
-        /* 按钮容器，用于将开始和停止按钮放在一行 */
-        #button-container {
-            margin-bottom: 20px;
+        h1 {
+            color: #4CAF50;
+            margin-top: 20px;
+            margin-bottom: 10px;
+            font-size: 1.5em; /* 适应手机 */
         }
-
-        #status { 
-            font-size: 1.2em; 
-            color: #1a73e8; 
-            margin-bottom: 10px; 
-            font-weight: bold;
+        .controls {
+            margin: 15px 0;
+            display: flex;
+            gap: 10px; /* 按钮间距 */
+            width: 90%; /* 控制区域宽度 */
+            justify-content: center;
         }
-        button { 
-            padding: 10px 20px; 
-            font-size: 1em; 
-            cursor: pointer; 
-            color: white;
+        button {
+            padding: 10px 20px;
+            font-size: 1em;
+            cursor: pointer;
             border: none;
             border-radius: 5px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            transition: background-color 0.3s;
-            margin: 0 5px; 
+            transition: background-color 0.3s ease;
         }
-        
         #startButton {
-            background-color: #4CAF50; /* 绿色 */
+            background-color: #4CAF50;
+            color: white;
         }
-        
-        #stopButton {
-            background-color: #f44336; /* 红色 */
+        #startButton:hover:not(:disabled) {
+            background-color: #45a049;
         }
-
-        button:disabled {
-            background-color: #ccc;
+        #startButton:disabled {
+            background-color: #cccccc;
             cursor: not-allowed;
         }
-
-        #canvasOutput {
-             border: 3px solid #ccc; 
-             margin: 10px;
-             display: block; 
+        #stopButton {
+            background-color: #f44336;
+            color: white;
+        }
+        #stopButton:hover:not(:disabled) {
+            background-color: #da190b;
+        }
+        #stopButton:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #status {
+            margin-bottom: 15px;
+            font-size: 0.9em;
+            color: #555;
+            text-align: center;
+            width: 90%;
+        }
+        /* 关键修改：视频和画布的响应式样式 */
+        #videoInput, #canvasOutput {
+            max-width: 95%; /* 限制最大宽度，适配手机屏幕 */
+            height: auto; /* 高度自适应 */
+            border: 2px solid #ddd;
+            display: block; /* 移除行内元素默认间距 */
+            margin-bottom: 10px;
+        }
+        #videoInput {
+            display: none; /* 视频流在Canvas上显示，所以可以隐藏原始video元素 */
         }
     </style>
 </head>
 <body>
-
     <h1>八音盒谱子实时扫描</h1>
-    
-    <div id="status">加载 OpenCV...</div>
-    
-    <div id="button-container">
-        <button id="startButton" disabled>点击开始扫描</button>
-        <button id="stopButton" disabled>停止扫描</button> 
+    <div class="controls">
+        <button id="startButton">点击开始扫描</button>
+        <button id="stopButton" disabled>停止扫描</button>
     </div>
+    <div id="status">OpenCV 正在加载...</div>
     
-    <video id="videoInput" style="display:none;" autoplay muted playsinline></video>
+    <video id="videoInput" playsinline muted></video> 
     
     <canvas id="canvasOutput"></canvas>
 
-    <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvLoaded();"></script>
-
-    <script src="30ver.js"></script> 
-
+    <script src="30ver.js"></script>
 </body>
 </html>
