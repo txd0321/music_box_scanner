@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------
-// 文件: 30ver.js (已修改为 15 个指定音阶，反序排列，后置摄像头，并更改了格子线样式)
+// 文件: 30ver.js (最终版本：15个指定音阶，高音在上，低音在下，只有水平格子)
 // -------------------------------------------------------------------
 
 // --- 全局变量 ---
@@ -17,9 +17,10 @@ let isProcessing = false;
 let lastDetectedPitches = []; 
 let videoStream = null; 
 
-// --- 音乐常量 (修改为 15 个指定的非连续音阶，从最高音 B6 到最低音 C4 反序排列) ---
+// --- 音乐常量 (15个指定音阶，从最高音 B6 到最低音 C4 反序排列) ---
+// B6 (最高音) 在数组第一位，对应 Canvas 顶部
+// C4 (最低音) 在数组末位，对应 Canvas 底部
 const TARGET_NOTES = [
-    // 从 B6 (最高音) 开始，到 C4 (最低音) 结束，共 15 个音阶
     { name: "B6", midi: 95 }, 
     { name: "C6", midi: 84 }, 
     { name: "A5", midi: 81 }, 
@@ -34,12 +35,14 @@ const TARGET_NOTES = [
     { name: "F4", midi: 65 }, 
     { name: "E4", midi: 64 }, 
     { name: "D4", midi: 62 }, 
-    { name: "C4", midi: 60 } // 最低音
+    { name: "C4", midi: 60 } 
 ];
 const NUM_STEPS = TARGET_NOTES.length; // 15
 
 let PITCH_MAP = {};     
 let GRID_LINES = {};    
+
+// 移除 NUM_COLUMNS 常量，因为它不再需要
 
 
 // --- 辅助函数 (保持不变) ---
@@ -206,7 +209,7 @@ function playNotes(frequencies) {
 }
 
 
-// --- 实时图像处理循环 (绘制格子线的逻辑) ---
+// --- 实时图像处理循环 (移除了垂直分割线逻辑) ---
 
 function processVideo() {
     if (!isProcessing) return;
@@ -229,16 +232,21 @@ function processVideo() {
     // 3. 定义 ROI 和绘制格子
     const ROI_X = canvas.width / 2 - 20;
     const ROI_W = 40; 
+    
+    // 绘制 ROI 框 (绿色)
     cv.rectangle(cap, new cv.Point(ROI_X, 0), new cv.Point(ROI_X + ROI_W, canvas.height), [0, 255, 0, 255], 2);
     
-    // **绘制边缘线（细、浅灰色）**
+    
+    // **绘制水平格子线 (边缘线和中线)**
+    
+    // 边缘线（细、浅灰色）
     // 颜色: [B, G, R, A] => 浅灰色: [150, 150, 150, 255], 粗细: 1
     for (let i = 0; i < GRID_LINES.length; i++) {
         const line = GRID_LINES[i];
         cv.line(cap, new cv.Point(0, line.y), new cv.Point(canvas.width, line.y), [150, 150, 150, 255], 1);
     }
     
-    // **绘制中线（大红色）和音符名称**
+    // 中线（大红色）和音符名称
     // 颜色: [B, G, R, A] => 大红色: [0, 0, 255, 255], 粗细: 1
     const keys = Object.keys(PITCH_MAP).map(Number).sort((a, b) => a - b);
     for (let i = 0; i < NUM_STEPS; i++) {
@@ -257,6 +265,8 @@ function processVideo() {
             cv.putText(cap, pitchInfo.name, new cv.Point(5, pitchInfo.minY + 10), cv.FONT_HERSHEY_SIMPLEX, 0.3, [255, 0, 0, 255], 1);
         }
     }
+
+    // *** 注意：这里是移除垂直分割线的地方 ***
 
 
     // 4. 查找轮廓 (不变)
