@@ -1,8 +1,8 @@
 // -------------------------------------------------------------------
-// 文件: 30ver.js (最终版本：15个指定音阶，高音在上，低音在下，只有水平格子)
+// 文件: 30ver.js (添加 AudioContext 恢复逻辑)
 // -------------------------------------------------------------------
 
-// --- 全局变量 ---
+// --- (其他全局变量和常量保持不变) ---
 const video = document.getElementById('videoInput');
 const canvas = document.getElementById('canvasOutput');
 const ctx = canvas.getContext('2d');
@@ -17,9 +17,6 @@ let isProcessing = false;
 let lastDetectedPitches = []; 
 let videoStream = null; 
 
-// --- 音乐常量 (15个指定音阶，从最高音 B6 到最低音 C4 反序排列) ---
-// B6 (最高音) 在数组第一位，对应 Canvas 顶部
-// C4 (最低音) 在数组末位，对应 Canvas 底部
 const TARGET_NOTES = [
     { name: "B6", midi: 95 }, 
     { name: "C6", midi: 84 }, 
@@ -37,16 +34,13 @@ const TARGET_NOTES = [
     { name: "D4", midi: 62 }, 
     { name: "C4", midi: 60 } 
 ];
-const NUM_STEPS = TARGET_NOTES.length; // 15
+const NUM_STEPS = TARGET_NOTES.length; 
 
 let PITCH_MAP = {};     
 let GRID_LINES = {};    
 
-// 移除 NUM_COLUMNS 常量，因为它不再需要
-
 
 // --- 辅助函数 (保持不变) ---
-
 function getFreqFromMidi(midiNote) {
     return 440 * Math.pow(2, (midiNote - 69) / 12);
 }
@@ -74,7 +68,6 @@ function createGridMap(canvasHeight) {
         const center_y = margin + (i * stepHeight) + (stepHeight / 2);
         const line_y = margin + (i * stepHeight);
         
-        // 边缘线：只需记录每一步的起始线
         gridLines.push({y: line_y, type: 'edge'}); 
 
         const frequency = getFreqFromMidi(note.midi);
@@ -87,7 +80,6 @@ function createGridMap(canvasHeight) {
             midY: center_y 
         };
     }
-    // 添加最底部的边缘线
     gridLines.push({y: margin + NUM_STEPS * stepHeight, type: 'edge'}); 
     
     PITCH_MAP = pitchMap;
@@ -96,7 +88,7 @@ function createGridMap(canvasHeight) {
 }
 
 
-// --- 初始化、控制和发声 (保持不变) ---
+// --- 初始化、控制和发声 ---
 
 function onOpenCvLoaded() {
     statusElement.innerHTML = 'OpenCV 加载完毕，请点击开始按钮。';
@@ -119,7 +111,12 @@ function initCameraAndAudio() {
     stopButton.disabled = true; 
     statusElement.innerHTML = '请求摄像头权限...';
 
+    // 关键修改 1: 确保 AudioContext 在用户点击时创建或恢复
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(e => console.error("AudioContext resume failed:", e));
+    }
+
 
     // 确保使用后置摄像头
     navigator.mediaDevices.getUserMedia({ 
@@ -181,16 +178,29 @@ function stopProcessing() {
     if (src) { src.delete(); src = null; }
 
     if (audioCtx) {
+        // 确保在停止时关闭 AudioContext
         audioCtx.close().then(() => {
             audioCtx = null;
-        });
+        }).catch(e => console.error("AudioContext close failed:", e));
     }
 }
 
 function playNotes(frequencies) {
     if (!audioCtx) return;
 
-    frequencies.forEach(frequency => {
+    // 关键修改 2: 再次确保 AudioContext 处于活动状态
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume().then(() => {
+             // 恢复后再次尝试播放
+             _triggerPlay(frequencies);
+        }).catch(e => console.error("AudioContext resume failed in playNotes:", e));
+    } else {
+        _triggerPlay(frequencies);
+    }
+}
+
+function _triggerPlay(frequencies) {
+     frequencies.forEach(frequency => {
         const oscillator = audioCtx.createOscillator();
         const gainNode = audioCtx.createGain();
 
@@ -209,12 +219,12 @@ function playNotes(frequencies) {
 }
 
 
-// --- 实时图像处理循环 (移除了垂直分割线逻辑) ---
+// --- 实时图像处理循环 (保持不变) ---
 
 function processVideo() {
     if (!isProcessing) return;
 
-    // 1. 视频帧采集、翻转和预处理 (不变)
+    // 1. 视频帧采集、翻转和预处理
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     cap.data.set(imageData.data); 
@@ -237,17 +247,15 @@ function processVideo() {
     cv.rectangle(cap, new cv.Point(ROI_X, 0), new cv.Point(ROI_X + ROI_W, canvas.height), [0, 255, 0, 255], 2);
     
     
-    // **绘制水平格子线 (边缘线和中线)**
+    // 绘制水平格子线 (边缘线和中线)
     
     // 边缘线（细、浅灰色）
-    // 颜色: [B, G, R, A] => 浅灰色: [150, 150, 150, 255], 粗细: 1
     for (let i = 0; i < GRID_LINES.length; i++) {
         const line = GRID_LINES[i];
         cv.line(cap, new cv.Point(0, line.y), new cv.Point(canvas.width, line.y), [150, 150, 150, 255], 1);
     }
     
     // 中线（大红色）和音符名称
-    // 颜色: [B, G, R, A] => 大红色: [0, 0, 255, 255], 粗细: 1
     const keys = Object.keys(PITCH_MAP).map(Number).sort((a, b) => a - b);
     for (let i = 0; i < NUM_STEPS; i++) {
         const center_y = keys[i]; 
@@ -266,10 +274,8 @@ function processVideo() {
         }
     }
 
-    // *** 注意：这里是移除垂直分割线的地方 ***
 
-
-    // 4. 查找轮廓 (不变)
+    // 4. 查找轮廓
     let contours = new cv.MatVector();
     let hierarchy = new cv.Mat();
     cv.findContours(src, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE); 
@@ -277,7 +283,7 @@ function processVideo() {
     let currentPitches = []; 
     let currentNoteNames = [];
     
-    // 5. 遍历轮廓并检测是否在 ROI 内 (不变)
+    // 5. 遍历轮廓并检测是否在 ROI 内
     for (let i = 0; i < contours.size(); ++i) {
         let contour = contours.get(i);
         let area = cv.contourArea(contour);
@@ -302,7 +308,7 @@ function processVideo() {
         }
     }
     
-    // 7. 发声逻辑 (不变)
+    // 7. 发声逻辑
     const uniquePitches = Array.from(new Set(currentPitches)); 
     const uniqueNames = Array.from(new Set(currentNoteNames));
     
@@ -321,7 +327,7 @@ function processVideo() {
     }
 
 
-    // 8. 输出图像和清理 (不变)
+    // 8. 输出图像和清理
     cv.imshow('canvasOutput', cap);
 
     contours.delete();
