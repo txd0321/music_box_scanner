@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------
-// 文件: 30ver.js (适配手机尺寸，移除视频显示水平翻转，强化 AudioContext 恢复逻辑)
+// 文件: 30ver.js (音阶顺序调整：最低音C4在顶部，最高音B6在底部)
 // -------------------------------------------------------------------
 
 // --- 全局变量 ---
@@ -17,25 +17,27 @@ let isProcessing = false;
 let lastDetectedPitches = []; 
 let videoStream = null; 
 
-// --- 音乐常量 (15个指定音阶，从最高音 B6 到最低音 C4 反序排列) ---
+// --- 音乐常量 (15个指定音阶，从最低音 C4 到最高音 B6 顺序排列) ---
+// C4 (最低音) 在数组第一位，对应 Canvas 顶部
+// B6 (最高音) 在数组末位，对应 Canvas 底部
 const TARGET_NOTES = [
-    { name: "B6", midi: 95 }, 
-    { name: "C6", midi: 84 }, 
-    { name: "A5", midi: 81 }, 
-    { name: "G5", midi: 79 }, 
-    { name: "F5", midi: 77 }, 
-    { name: "E5", midi: 76 }, 
-    { name: "D5", midi: 74 }, 
-    { name: "C5", midi: 72 }, 
-    { name: "B4", midi: 71 }, 
-    { name: "A4", midi: 69 }, 
-    { name: "G4", midi: 67 }, 
-    { name: "F4", midi: 65 }, 
-    { name: "E4", midi: 64 }, 
+    { name: "C4", midi: 60 }, 
     { name: "D4", midi: 62 }, 
-    { name: "C4", midi: 60 } 
+    { name: "E4", midi: 64 }, 
+    { name: "F4", midi: 65 }, 
+    { name: "G4", midi: 67 }, 
+    { name: "A4", midi: 69 }, 
+    { name: "B4", midi: 71 }, 
+    { name: "C5", midi: 72 }, 
+    { name: "D5", midi: 74 }, 
+    { name: "E5", midi: 76 }, 
+    { name: "F5", midi: 77 }, 
+    { name: "G5", midi: 79 }, 
+    { name: "A5", midi: 81 }, 
+    { name: "C6", midi: 84 }, // 注意，C6比B6低，所以它排在B6前面
+    { name: "B6", midi: 95 }  
 ];
-const NUM_STEPS = TARGET_NOTES.length; 
+const NUM_STEPS = TARGET_NOTES.length; // 15
 
 let PITCH_MAP = {};     
 let GRID_LINES = {};    
@@ -62,13 +64,15 @@ function createGridMap(canvasHeight) {
     const stepHeight = usableHeight / NUM_STEPS;
     
     const pitchMap = {};
-    const gridLines = [];
+    const gridLines = []; 
     
+    // 遍历音符数组，i=0 对应 Canvas 顶部，i=NUM_STEPS-1 对应 Canvas 底部
     for (let i = 0; i < NUM_STEPS; i++) {
         const note = TARGET_NOTES[i];
         const center_y = margin + (i * stepHeight) + (stepHeight / 2);
         const line_y = margin + (i * stepHeight);
         
+        // 仍然记录边缘位置，用于后面的 min/maxY 计算
         gridLines.push({y: line_y, type: 'edge'}); 
 
         const frequency = getFreqFromMidi(note.midi);
@@ -81,6 +85,7 @@ function createGridMap(canvasHeight) {
             midY: center_y 
         };
     }
+    // 添加最底部的边缘线
     gridLines.push({y: margin + NUM_STEPS * stepHeight, type: 'edge'}); 
     
     PITCH_MAP = pitchMap;
@@ -89,7 +94,7 @@ function createGridMap(canvasHeight) {
 }
 
 
-// --- 初始化、控制和发声 ---
+// --- 初始化、控制和发声 (保持不变) ---
 
 function onOpenCvLoaded() {
     statusElement.innerHTML = 'OpenCV 加载完毕，请点击开始按钮。';
@@ -130,7 +135,6 @@ function initCameraAndAudio() {
             video.onloadedmetadata = function() {
                 video.play();
                 
-                // 关键修改：确保 Canvas 尺寸与视频流原始尺寸匹配
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
                 
@@ -219,18 +223,15 @@ function playNotes(frequencies) {
 }
 
 
-// --- 实时图像处理循环 (移除视频翻转) ---
+// --- 实时图像处理循环 (只绘制红色中线) ---
 
 function processVideo() {
     if (!isProcessing) return;
 
-    // 1. 视频帧采集、翻转和预处理
+    // 1. 视频帧采集和预处理
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     cap.data.set(imageData.data); 
-
-    // 🌟 关键修改：移除 cv.flip(cap, cap, 1); 
-    // 现在视频会以原始（非镜像）方式显示。
     
     cv.cvtColor(cap, src, cv.COLOR_RGBA2GRAY, 0); 
     cv.threshold(src, src, 120, 255, cv.THRESH_BINARY_INV); 
@@ -240,30 +241,29 @@ function processVideo() {
     kernel.delete();
 
 
-    // 3. 定义 ROI 和绘制格子 (保持不变)
+    // 3. 定义 ROI 和绘制中线
     const ROI_X = canvas.width / 2 - 20;
     const ROI_W = 40; 
     
+    // 绘制 ROI 框 (绿色)
     cv.rectangle(cap, new cv.Point(ROI_X, 0), new cv.Point(ROI_X + ROI_W, canvas.height), [0, 255, 0, 255], 2);
     
     
-    for (let i = 0; i < GRID_LINES.length; i++) {
-        const line = GRID_LINES[i];
-        cv.line(cap, new cv.Point(0, line.y), new cv.Point(canvas.width, line.y), [150, 150, 150, 255], 1);
-    }
-    
+    // 只绘制中线（大红色）和音符名称
     const keys = Object.keys(PITCH_MAP).map(Number).sort((a, b) => a - b);
     for (let i = 0; i < NUM_STEPS; i++) {
         const center_y = keys[i]; 
         const pitchInfo = PITCH_MAP[center_y];
 
         if (pitchInfo) {
+            // 绘制中线
             cv.line(cap, 
                 new cv.Point(0, pitchInfo.midY), 
                 new cv.Point(canvas.width, pitchInfo.midY), 
                 [0, 0, 255, 255], // 纯红色
                 1
             );
+            // 绘制音符名称 (C4 在顶部，B6 在底部)
             cv.putText(cap, pitchInfo.name, new cv.Point(5, pitchInfo.minY + 10), cv.FONT_HERSHEY_SIMPLEX, 0.3, [255, 0, 0, 255], 1);
         }
     }
