@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------
-// 文件: 30ver.js (最小化UI，仅保留中央ROI和上下基准点进行动态Y轴校正)
+// 文件: 30ver.js (识别红色方形目标点, 绿色ROI宽度加宽至 40 像素)
 // -------------------------------------------------------------------
 
 // --- 全局变量 ---
@@ -12,19 +12,25 @@ const statusElement = document.getElementById('status');
 
 let cap = null;     
 let src = null;     
-let audioCtx = null;
+let hsv = null;     
 let isProcessing = false;
 let lastDetectedPitches = []; 
 let videoStream = null; 
 
-// 🎯 固定 ROI 变量 (保持不变)
-const ROI_W = 20;    
+// 🎯 固定 ROI 变量
+const ROI_W = 40;    // 🎯 关键修改: ROI 宽度加宽至 40 像素
 let fixedROI_X = 0; 
+
+// 🎨 颜色识别常量 (针对红色) - 保持不变
+const LOWER_RED_1 = new cv.Scalar(0, 100, 100);    
+const UPPER_RED_1 = new cv.Scalar(10, 255, 255);   
+const LOWER_RED_2 = new cv.Scalar(160, 100, 100);  
+const UPPER_RED_2 = new cv.Scalar(180, 255, 255);  
+
 
 // 🎯 Y 轴基准点和音阶定义 (保持不变)
 const ANCHOR_TOP_NAME = "ANCHOR_TOP";
 const ANCHOR_BOTTOM_NAME = "ANCHOR_BOTTOM";
-// 音乐常量：只有音符需要发声，基准点不再显示名称
 const TARGET_NOTES_ONLY = [
     { name: "C4", midi: 60 }, 
     { name: "D4", midi: 62 }, 
@@ -43,12 +49,9 @@ const TARGET_NOTES_ONLY = [
     { name: "B6", midi: 95 }  
 ];
 const NUM_MUSICAL_NOTES = TARGET_NOTES_ONLY.length; 
-// 实际总区域数 = 音符数 + 2个基准点
 const NUM_TOTAL_REGIONS = NUM_MUSICAL_NOTES + 2;
 
-// 动态生成的音高映射表，现在包含基准点信息
 let PITCH_MAP = {}; 
-// 缓存上一次的基准点Y坐标，用于丢失基准点时保持稳定
 let lastTopY = null;
 let lastBottomY = null;
 
@@ -68,41 +71,35 @@ function arraysEqual(a, b) {
     return true;
 }
 
-// 🎯 动态网格映射函数 (现在只关注生成正确的音高区域，不绘制)
 function createDynamicGridMap(topY, bottomY, canvasHeight) {
-    
     const fixedTopY = topY !== null ? topY : (lastTopY !== null ? lastTopY : 10);
     const fixedBottomY = bottomY !== null ? bottomY : (lastBottomY !== null ? lastBottomY : canvasHeight - 10);
     
-    if (topY !== null && bottomY !== null) { // 成功检测到基准点时才更新缓存
+    if (topY !== null && bottomY !== null) { 
         lastTopY = fixedTopY;
         lastBottomY = fixedBottomY;
     }
     
-    if (fixedBottomY <= fixedTopY + 5) { // 避免高度过小导致错误
+    if (fixedBottomY <= fixedTopY + 5) { 
         return;
     }
     
     const actualHeight = fixedBottomY - fixedTopY;
-    // 实际每个区域的高度 (总区域数包括基准点)
     const actualStepHeight = actualHeight / (NUM_TOTAL_REGIONS - 1); 
     
     const pitchMap = {};
     
-    // 首先添加顶部基准点
     pitchMap[Math.round(fixedTopY)] = {
-        freq: 0, // 不发声
+        freq: 0, 
         name: ANCHOR_TOP_NAME,
         minY: fixedTopY,
         maxY: fixedTopY + actualStepHeight,
         midY: fixedTopY + actualStepHeight / 2
     };
 
-    // 接着添加音乐音符
     for (let i = 0; i < NUM_MUSICAL_NOTES; i++) {
         const note = TARGET_NOTES_ONLY[i];
         
-        // 音符的 Y 轴位置从顶部基准点下方开始
         const line_y = fixedTopY + ((i + 1) * actualStepHeight);
         const center_y = line_y + (actualStepHeight / 2);
         
@@ -117,21 +114,19 @@ function createDynamicGridMap(topY, bottomY, canvasHeight) {
         };
     }
 
-    // 最后添加底部基准点
     const bottomAnchorLineY = fixedTopY + ((NUM_TOTAL_REGIONS - 1) * actualStepHeight);
     pitchMap[Math.round(bottomAnchorLineY)] = {
-        freq: 0, // 不发声
+        freq: 0, 
         name: ANCHOR_BOTTOM_NAME,
         minY: bottomAnchorLineY,
-        maxY: bottomAnchorLineY + actualStepHeight, // 实际上是到图像底部，但保持步长一致性
+        maxY: bottomAnchorLineY + actualStepHeight, 
         midY: bottomAnchorLineY + actualStepHeight / 2
     };
     
     PITCH_MAP = pitchMap;
 }
 
-
-// --- 初始化、控制和发声 (修改 ROI 初始化) ---
+// --- 初始化、控制和发声 (保持不变) ---
 
 function onOpenCvLoaded() {
     statusElement.innerHTML = 'OpenCV 加载完毕，请点击开始按钮。';
@@ -177,11 +172,11 @@ function initCameraAndAudio() {
                 
                 fixedROI_X = canvas.width / 2 - ROI_W / 2;
                 
-                // 初始网格映射：使用默认值 (10 和 height-10)
                 createDynamicGridMap(null, null, canvas.height); 
                 
                 cap = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
                 src = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC1);
+                hsv = new cv.Mat(); 
                 
                 statusElement.innerHTML = '摄像头就绪，开始识别...';
                 isProcessing = true;
@@ -220,6 +215,7 @@ function stopProcessing() {
     
     if (cap) { cap.delete(); cap = null; }
     if (src) { src.delete(); src = null; }
+    if (hsv) { hsv.delete(); hsv = null; } 
 
     if (audioCtx) {
         audioCtx.close().then(() => {
@@ -263,22 +259,33 @@ function playNotes(frequencies) {
 }
 
 
-// --- 实时图像处理循环 (最小化UI，仅保留中央ROI和Y轴校正) ---
+// --- 实时图像处理循环 (识别红色方形) ---
 
 function processVideo() {
     if (!isProcessing) return;
 
-    // 1. 视频帧采集和预处理
+    // 1. 视频帧采集和颜色预处理
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     cap.data.set(imageData.data); 
     
-    cv.cvtColor(cap, src, cv.COLOR_RGBA2GRAY, 0); 
-    cv.threshold(src, src, 120, 255, cv.THRESH_BINARY_INV); 
+    cv.cvtColor(cap, hsv, cv.COLOR_RGBA2HSV);
     
+    let mask1 = new cv.Mat();
+    let mask2 = new cv.Mat();
+    
+    cv.inRange(hsv, LOWER_RED_1, UPPER_RED_1, mask1);
+    cv.inRange(hsv, LOWER_RED_2, UPPER_RED_2, mask2);
+    
+    cv.bitwise_or(mask1, mask2, src);
+    
+    mask1.delete();
+    mask2.delete();
+
     let kernel = new cv.Mat();
-    kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(2, 2));
+    kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3)); 
     cv.erode(src, src, kernel); 
+    cv.dilate(src, src, kernel); 
     kernel.delete();
 
 
@@ -297,41 +304,39 @@ function processVideo() {
         let contour = contours.get(i);
         let area = cv.contourArea(contour);
 
-        // 面积过滤
-        if (area < 100 || area > 4000) { 
+        // 面积过滤 
+        if (area < 70 || area > 6000) { 
             continue;
         }
 
         let rect = cv.boundingRect(contour);
         
-        // 形状过滤 (长宽比)
+        // 形状过滤 (长宽比 - 针对正方形)
         const aspectRatio = rect.width / rect.height;
-        if (aspectRatio < 0.5 || aspectRatio > 2.0) {
+        if (aspectRatio < 0.7 || aspectRatio > 1.3) { 
             continue;
         }
         
-        // 形状过滤 (圆度)
+        // 形状过滤 (实心度 - 针对实心正方形)
         let hull = new cv.Mat();
         cv.convexHull(contour, hull);
         const hullArea = cv.contourArea(hull);
         hull.delete(); 
-        if (hullArea === 0 || area / hullArea < 0.8) {
+        if (hullArea === 0 || area / hullArea < 0.85) { 
             continue;
         }
         
+        // 轮廓筛选成功，它是一个合格的红色方形
         let center_x = rect.x + rect.width / 2;
         let center_y = rect.y + rect.height / 2;
         
-        // 🎯 仅检查是否在固定的中央 ROI 内
+        // 🎯 仅检查是否在固定的中央 ROI 内 (fixedROI_X)
         if (center_x >= fixedROI_X && center_x <= fixedROI_X + ROI_W) {
             
             // 识别成功的圆点显示为蓝色
             cv.circle(cap, new cv.Point(center_x, center_y), 5, [255, 0, 0, 255], -1); 
             
-            // 识别音高和基准点
-            // 注意：这里需要遍历 PITCH_MAP 的键，但要确保 PITCH_MAP 已经更新
-            // 在这一帧中，PITCH_MAP 还是上一帧计算的，但这不是问题
-            // 因为我们只收集 Y 轴基准点，真正的音高判断在 PITCH_MAP 更新后
+            // 识别音高和基准点 (使用上一帧的 PITCH_MAP)
             for (const key in PITCH_MAP) {
                 const pitchInfo = PITCH_MAP[key];
                 
@@ -353,7 +358,7 @@ function processVideo() {
         }
     }
     
-    // 4. 🎯 Y 轴校正：计算新的网格映射 (基于这一帧收集到的基准点)
+    // 4. Y 轴校正：计算新的网格映射
     let newTopY = null;
     let newBottomY = null;
     
@@ -364,12 +369,10 @@ function processVideo() {
         newBottomY = bottomAnchorYs.reduce((a, b) => a + b, 0) / bottomAnchorYs.length;
     }
     
-    createDynamicGridMap(newTopY, newBottomY, canvas.height); // 更新 PITCH_MAP
-    
+    createDynamicGridMap(newTopY, newBottomY, canvas.height); 
+
     
     // 5. (重新) 遍历轮廓以使用更新后的 PITCH_MAP 进行准确识别
-    // 这一步是必要的，因为 PITCH_MAP 刚刚被 createDynamicGridMap 更新
-    // 如果不重新遍历，音高判断会基于上一帧的 Y 轴校正
     currentPitches = []; 
     currentNoteNames = [];
     
@@ -377,18 +380,16 @@ function processVideo() {
         let contour = contours.get(i);
         let area = cv.contourArea(contour);
 
+        // 重新检查过滤条件
+        if (area < 70 || area > 6000) continue; 
         let rect = cv.boundingRect(contour);
         const aspectRatio = rect.width / rect.height;
-        if (area < 100 || area > 4000 || aspectRatio < 0.5 || aspectRatio > 2.0) {
-            continue;
-        }
+        if (aspectRatio < 0.7 || aspectRatio > 1.3) continue;
         let hull = new cv.Mat();
         cv.convexHull(contour, hull);
         const hullArea = cv.contourArea(hull);
         hull.delete(); 
-        if (hullArea === 0 || area / hullArea < 0.8) {
-             continue;
-        }
+        if (hullArea === 0 || area / hullArea < 0.85) continue;
         
         let center_x = rect.x + rect.width / 2;
         let center_y = rect.y + rect.height / 2;
@@ -397,7 +398,7 @@ function processVideo() {
             for (const key in PITCH_MAP) {
                 const pitchInfo = PITCH_MAP[key];
                 
-                if (pitchInfo.midi === 0) continue; // 忽略基准点
+                if (pitchInfo.midi === 0) continue; 
                 
                 if (center_y >= pitchInfo.minY && center_y < pitchInfo.maxY) {
                     currentPitches.push(pitchInfo.freq);
@@ -408,8 +409,7 @@ function processVideo() {
         }
     }
 
-
-    // 6. 绘制固定的 ROI
+    // 6. 绘制固定的 ROI (绿色)
     cv.rectangle(cap, new cv.Point(fixedROI_X, 0), new cv.Point(fixedROI_X + ROI_W, canvas.height), [0, 255, 0, 255], 2);
     
     // 7. 发声逻辑 (保持不变)
@@ -444,4 +444,5 @@ function processVideo() {
 window.onunload = () => {
     if (cap) cap.delete();
     if (src) src.delete();
+    if (hsv) hsv.delete(); 
 };
