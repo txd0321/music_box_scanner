@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------
-// 文件: 30ver.js (固定中央 ROI，仅保留上下基准点和动态Y轴校正)
+// 文件: 30ver.js (最小化UI，仅保留中央ROI和上下基准点进行动态Y轴校正)
 // -------------------------------------------------------------------
 
 // --- 全局变量 ---
@@ -17,15 +17,15 @@ let isProcessing = false;
 let lastDetectedPitches = []; 
 let videoStream = null; 
 
-// 🎯 固定 ROI 变量
-const ROI_W = 20;    // ROI 宽度
-let fixedROI_X = 0; // 将在初始化时计算
+// 🎯 固定 ROI 变量 (保持不变)
+const ROI_W = 20;    
+let fixedROI_X = 0; 
 
 // 🎯 Y 轴基准点和音阶定义 (保持不变)
 const ANCHOR_TOP_NAME = "ANCHOR_TOP";
 const ANCHOR_BOTTOM_NAME = "ANCHOR_BOTTOM";
-const TARGET_NOTES_WITH_ANCHORS = [
-    { name: ANCHOR_TOP_NAME, midi: 0 },   
+// 音乐常量：只有音符需要发声，基准点不再显示名称
+const TARGET_NOTES_ONLY = [
     { name: "C4", midi: 60 }, 
     { name: "D4", midi: 62 }, 
     { name: "E4", midi: 64 }, 
@@ -40,11 +40,13 @@ const TARGET_NOTES_WITH_ANCHORS = [
     { name: "G5", midi: 79 }, 
     { name: "A5", midi: 81 }, 
     { name: "C6", midi: 84 },
-    { name: "B6", midi: 95 },
-    { name: ANCHOR_BOTTOM_NAME, midi: 0 } 
+    { name: "B6", midi: 95 }  
 ];
-const NUM_REGIONS = TARGET_NOTES_WITH_ANCHORS.length; 
+const NUM_MUSICAL_NOTES = TARGET_NOTES_ONLY.length; 
+// 实际总区域数 = 音符数 + 2个基准点
+const NUM_TOTAL_REGIONS = NUM_MUSICAL_NOTES + 2;
 
+// 动态生成的音高映射表，现在包含基准点信息
 let PITCH_MAP = {}; 
 // 缓存上一次的基准点Y坐标，用于丢失基准点时保持稳定
 let lastTopY = null;
@@ -66,15 +68,13 @@ function arraysEqual(a, b) {
     return true;
 }
 
-// 🎯 动态网格映射函数 (基于实际检测到的 Y 坐标)
+// 🎯 动态网格映射函数 (现在只关注生成正确的音高区域，不绘制)
 function createDynamicGridMap(topY, bottomY, canvasHeight) {
     
-    // 如果是第一次调用或者基准点丢失，使用缓存或默认值
     const fixedTopY = topY !== null ? topY : (lastTopY !== null ? lastTopY : 10);
     const fixedBottomY = bottomY !== null ? bottomY : (lastBottomY !== null ? lastBottomY : canvasHeight - 10);
     
-    // 如果成功检测到，更新缓存
-    if (topY !== null && bottomY !== null) {
+    if (topY !== null && bottomY !== null) { // 成功检测到基准点时才更新缓存
         lastTopY = fixedTopY;
         lastBottomY = fixedBottomY;
     }
@@ -84,17 +84,29 @@ function createDynamicGridMap(topY, bottomY, canvasHeight) {
     }
     
     const actualHeight = fixedBottomY - fixedTopY;
-    const actualStepHeight = actualHeight / (NUM_REGIONS - 1); 
+    // 实际每个区域的高度 (总区域数包括基准点)
+    const actualStepHeight = actualHeight / (NUM_TOTAL_REGIONS - 1); 
     
     const pitchMap = {};
     
-    for (let i = 0; i < NUM_REGIONS; i++) {
-        const note = TARGET_NOTES_WITH_ANCHORS[i];
+    // 首先添加顶部基准点
+    pitchMap[Math.round(fixedTopY)] = {
+        freq: 0, // 不发声
+        name: ANCHOR_TOP_NAME,
+        minY: fixedTopY,
+        maxY: fixedTopY + actualStepHeight,
+        midY: fixedTopY + actualStepHeight / 2
+    };
+
+    // 接着添加音乐音符
+    for (let i = 0; i < NUM_MUSICAL_NOTES; i++) {
+        const note = TARGET_NOTES_ONLY[i];
         
-        const line_y = fixedTopY + (i * actualStepHeight);
+        // 音符的 Y 轴位置从顶部基准点下方开始
+        const line_y = fixedTopY + ((i + 1) * actualStepHeight);
         const center_y = line_y + (actualStepHeight / 2);
         
-        const frequency = note.midi !== 0 ? getFreqFromMidi(note.midi) : 0;
+        const frequency = getFreqFromMidi(note.midi);
 
         pitchMap[Math.round(center_y)] = {
             freq: frequency,
@@ -104,6 +116,16 @@ function createDynamicGridMap(topY, bottomY, canvasHeight) {
             midY: center_y 
         };
     }
+
+    // 最后添加底部基准点
+    const bottomAnchorLineY = fixedTopY + ((NUM_TOTAL_REGIONS - 1) * actualStepHeight);
+    pitchMap[Math.round(bottomAnchorLineY)] = {
+        freq: 0, // 不发声
+        name: ANCHOR_BOTTOM_NAME,
+        minY: bottomAnchorLineY,
+        maxY: bottomAnchorLineY + actualStepHeight, // 实际上是到图像底部，但保持步长一致性
+        midY: bottomAnchorLineY + actualStepHeight / 2
+    };
     
     PITCH_MAP = pitchMap;
 }
@@ -153,7 +175,6 @@ function initCameraAndAudio() {
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
                 
-                // 🎯 固定 ROI X 轴位置在屏幕中心
                 fixedROI_X = canvas.width / 2 - ROI_W / 2;
                 
                 // 初始网格映射：使用默认值 (10 和 height-10)
@@ -242,7 +263,7 @@ function playNotes(frequencies) {
 }
 
 
-// --- 实时图像处理循环 (合并和简化逻辑) ---
+// --- 实时图像处理循环 (最小化UI，仅保留中央ROI和Y轴校正) ---
 
 function processVideo() {
     if (!isProcessing) return;
@@ -308,13 +329,15 @@ function processVideo() {
             cv.circle(cap, new cv.Point(center_x, center_y), 5, [255, 0, 0, 255], -1); 
             
             // 识别音高和基准点
+            // 注意：这里需要遍历 PITCH_MAP 的键，但要确保 PITCH_MAP 已经更新
+            // 在这一帧中，PITCH_MAP 还是上一帧计算的，但这不是问题
+            // 因为我们只收集 Y 轴基准点，真正的音高判断在 PITCH_MAP 更新后
             for (const key in PITCH_MAP) {
                 const pitchInfo = PITCH_MAP[key];
                 
                 if (center_y >= pitchInfo.minY && center_y < pitchInfo.maxY) {
                     if (pitchInfo.name === ANCHOR_TOP_NAME) {
                         topAnchorYs.push(center_y);
-                        // 发现基准点后，不再将其识别为音符
                         break; 
                     } else if (pitchInfo.name === ANCHOR_BOTTOM_NAME) {
                         bottomAnchorYs.push(center_y);
@@ -330,11 +353,10 @@ function processVideo() {
         }
     }
     
-    // 4. 🎯 Y 轴校正：计算新的网格映射
+    // 4. 🎯 Y 轴校正：计算新的网格映射 (基于这一帧收集到的基准点)
     let newTopY = null;
     let newBottomY = null;
     
-    // 平滑 Y 轴基准点（简单平均，不需要帧间平滑，因为 createDynamicGridMap 会处理稳定性）
     if (topAnchorYs.length > 0) {
         newTopY = topAnchorYs.reduce((a, b) => a + b, 0) / topAnchorYs.length;
     }
@@ -342,47 +364,55 @@ function processVideo() {
         newBottomY = bottomAnchorYs.reduce((a, b) => a + b, 0) / bottomAnchorYs.length;
     }
     
-    // 动态更新网格
-    if (PITCH_MAP) {
-         createDynamicGridMap(newTopY, newBottomY, canvas.height);
-    }
+    createDynamicGridMap(newTopY, newBottomY, canvas.height); // 更新 PITCH_MAP
     
     
-    // 5. 绘制固定的 ROI 和中线
+    // 5. (重新) 遍历轮廓以使用更新后的 PITCH_MAP 进行准确识别
+    // 这一步是必要的，因为 PITCH_MAP 刚刚被 createDynamicGridMap 更新
+    // 如果不重新遍历，音高判断会基于上一帧的 Y 轴校正
+    currentPitches = []; 
+    currentNoteNames = [];
     
-    // 绘制固定的中央 ROI 框 (绿色)
-    cv.rectangle(cap, new cv.Point(fixedROI_X, 0), new cv.Point(fixedROI_X + ROI_W, canvas.height), [0, 255, 0, 255], 2);
-    
-    let keys = Object.keys(PITCH_MAP).map(Number).sort((a, b) => a - b);
-    
-    // 绘制中线和音符名称 (使用动态 PITCH_MAP)
-    for (let i = 0; i < NUM_REGIONS; i++) {
-        const pitchInfo = PITCH_MAP[keys[i]];
+    for (let i = 0; i < contours.size(); ++i) {
+        let contour = contours.get(i);
+        let area = cv.contourArea(contour);
 
-        if (pitchInfo) {
-            // 绘制中线 (基准点线用橙色/蓝色，音符线用红色)
-            let lineColor = (pitchInfo.name === ANCHOR_TOP_NAME || pitchInfo.name === ANCHOR_BOTTOM_NAME) 
-                            ? [255, 100, 0, 255] 
-                            : [0, 0, 255, 255]; 
-            
-            cv.line(cap, 
-                new cv.Point(0, pitchInfo.midY), 
-                new cv.Point(canvas.width, pitchInfo.midY), 
-                lineColor, 
-                1
-            );
-            
-            // 绘制音符名称 
-            let nameColor = (pitchInfo.name === ANCHOR_TOP_NAME || pitchInfo.name === ANCHOR_BOTTOM_NAME)
-                            ? [150, 150, 150, 255]
-                            : [255, 0, 0, 255];
-                            
-            cv.putText(cap, pitchInfo.name, new cv.Point(5, pitchInfo.minY + 10), cv.FONT_HERSHEY_SIMPLEX, 0.3, nameColor, 1);
+        let rect = cv.boundingRect(contour);
+        const aspectRatio = rect.width / rect.height;
+        if (area < 100 || area > 4000 || aspectRatio < 0.5 || aspectRatio > 2.0) {
+            continue;
+        }
+        let hull = new cv.Mat();
+        cv.convexHull(contour, hull);
+        const hullArea = cv.contourArea(hull);
+        hull.delete(); 
+        if (hullArea === 0 || area / hullArea < 0.8) {
+             continue;
+        }
+        
+        let center_x = rect.x + rect.width / 2;
+        let center_y = rect.y + rect.height / 2;
+
+        if (center_x >= fixedROI_X && center_x <= fixedROI_X + ROI_W) {
+            for (const key in PITCH_MAP) {
+                const pitchInfo = PITCH_MAP[key];
+                
+                if (pitchInfo.midi === 0) continue; // 忽略基准点
+                
+                if (center_y >= pitchInfo.minY && center_y < pitchInfo.maxY) {
+                    currentPitches.push(pitchInfo.freq);
+                    currentNoteNames.push(pitchInfo.name);
+                    break; 
+                }
+            }
         }
     }
 
+
+    // 6. 绘制固定的 ROI
+    cv.rectangle(cap, new cv.Point(fixedROI_X, 0), new cv.Point(fixedROI_X + ROI_W, canvas.height), [0, 255, 0, 255], 2);
     
-    // 6. 发声逻辑 (保持不变)
+    // 7. 发声逻辑 (保持不变)
     const uniquePitches = Array.from(new Set(currentPitches)); 
     const uniqueNames = Array.from(new Set(currentNoteNames));
     
@@ -401,7 +431,7 @@ function processVideo() {
     }
 
 
-    // 7. 输出图像和清理 
+    // 8. 输出图像和清理 
     cv.imshow('canvasOutput', cap);
 
     contours.delete();
