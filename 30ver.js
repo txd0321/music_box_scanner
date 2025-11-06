@@ -1,8 +1,8 @@
 // -------------------------------------------------------------------
-// 文件: 30ver.js (添加 AudioContext 恢复逻辑)
+// 文件: 30ver.js (强化 AudioContext 恢复逻辑的最终尝试)
 // -------------------------------------------------------------------
 
-// --- (其他全局变量和常量保持不变) ---
+// --- 全局变量 ---
 const video = document.getElementById('videoInput');
 const canvas = document.getElementById('canvasOutput');
 const ctx = canvas.getContext('2d');
@@ -17,6 +17,7 @@ let isProcessing = false;
 let lastDetectedPitches = []; 
 let videoStream = null; 
 
+// --- 音乐常量 (15个指定音阶，从最高音 B6 到最低音 C4 反序排列) ---
 const TARGET_NOTES = [
     { name: "B6", midi: 95 }, 
     { name: "C6", midi: 84 }, 
@@ -111,10 +112,11 @@ function initCameraAndAudio() {
     stopButton.disabled = true; 
     statusElement.innerHTML = '请求摄像头权限...';
 
-    // 关键修改 1: 确保 AudioContext 在用户点击时创建或恢复
+    // 关键修改 1: 在用户点击时创建或恢复 AudioContext
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === 'suspended') {
-        audioCtx.resume().catch(e => console.error("AudioContext resume failed:", e));
+        // 在用户点击事件中尝试恢复，这是移动设备兼容的关键
+        audioCtx.resume().catch(e => console.error("AudioContext resume failed on click:", e));
     }
 
 
@@ -178,27 +180,13 @@ function stopProcessing() {
     if (src) { src.delete(); src = null; }
 
     if (audioCtx) {
-        // 确保在停止时关闭 AudioContext
         audioCtx.close().then(() => {
             audioCtx = null;
         }).catch(e => console.error("AudioContext close failed:", e));
     }
 }
 
-function playNotes(frequencies) {
-    if (!audioCtx) return;
-
-    // 关键修改 2: 再次确保 AudioContext 处于活动状态
-    if (audioCtx.state === 'suspended') {
-        audioCtx.resume().then(() => {
-             // 恢复后再次尝试播放
-             _triggerPlay(frequencies);
-        }).catch(e => console.error("AudioContext resume failed in playNotes:", e));
-    } else {
-        _triggerPlay(frequencies);
-    }
-}
-
+// 核心发声逻辑
 function _triggerPlay(frequencies) {
      frequencies.forEach(frequency => {
         const oscillator = audioCtx.createOscillator();
@@ -216,6 +204,25 @@ function _triggerPlay(frequencies) {
         oscillator.start();
         oscillator.stop(audioCtx.currentTime + 0.15); 
     });
+}
+
+function playNotes(frequencies) {
+    if (!audioCtx) return;
+
+    // 关键修改 2: 每次发声前都检查并尝试恢复
+    if (audioCtx.state === 'suspended') {
+        // 尝试恢复 AudioContext，并异步等待成功后再播放
+        audioCtx.resume().then(() => {
+             // 成功恢复后才执行播放
+             _triggerPlay(frequencies);
+        }).catch(e => {
+            console.error("AudioContext resume failed in playNotes:", e);
+            // 恢复失败，但仍然尝试播放（以防是浏览器报错但实际音频流就绪）
+            _triggerPlay(frequencies);
+        });
+    } else {
+        _triggerPlay(frequencies);
+    }
 }
 
 
