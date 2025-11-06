@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>八音盒谱子识别原型 (JS)</title>
+    <style>
+        body { 
+            margin: 0; 
+            padding: 20px;
+            text-align: center; 
+            font-family: sans-serif; 
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f4f4f4;
+        }
+        
+        /* 按钮容器，用于将开始和停止按钮放在一行 */
+        #button-container {
+            margin-bottom: 20px;
+        }
+
+        #status { 
+            font-size: 1.2em; 
+            color: #1a73e8; 
+            margin-bottom: 10px; 
+            font-weight: bold;
+        }
+        button { 
+            padding: 10px 20px; 
+            font-size: 1em; 
+            cursor: pointer; 
+            color: white;
+            border: none;
+            border-radius: 5px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: background-color 0.3s;
+            margin: 0 5px; 
+        }
+        
+        #startButton {
+            background-color: #4CAF50; /* 绿色 */
+        }
+        
+        #stopButton {
+            background-color: #f44336; /* 红色 */
+        }
+
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        #canvasOutput {
+             border: 3px solid #ccc; 
+             margin: 10px;
+             display: block; 
+        }
+    </style>
+</head>
+<body>
+
+    <h1>八音盒谱子实时扫描</h1>
+    
+    <div id="status">加载 OpenCV...</div>
+    
+    <div id="button-container">
+        <button id="startButton" disabled>点击开始扫描</button>
+        <button id="stopButton" disabled>停止扫描</button> 
+    </div>
+    
+    <video id="videoInput" style="display:none;" autoplay muted playsinline></video>
+    
+    <canvas id="canvasOutput"></canvas>
+
+    <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvLoaded();"></script>
+
+    <script src="30ver.js"></script> 
+
+</body>
+</html>
