@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------
-// 文件: 30ver.js (新增顶部和底部基准点，实现动态Y轴透视校正)
+// 文件: 30ver.js (固定中央 ROI，仅保留上下基准点和动态Y轴校正)
 // -------------------------------------------------------------------
 
 // --- 全局变量 ---
@@ -17,17 +17,15 @@ let isProcessing = false;
 let lastDetectedPitches = []; 
 let videoStream = null; 
 
-// 🎯 平滑跟踪变量 (保持不变)
-let currentROI_X = 0; 
-const ROI_SMOOTH_FACTOR = 0.1; 
-const ROI_W = 20; 
+// 🎯 固定 ROI 变量
+const ROI_W = 20;    // ROI 宽度
+let fixedROI_X = 0; // 将在初始化时计算
 
-// 🎯 基准点和音阶定义 (新增两个基准点)
+// 🎯 Y 轴基准点和音阶定义 (保持不变)
 const ANCHOR_TOP_NAME = "ANCHOR_TOP";
 const ANCHOR_BOTTOM_NAME = "ANCHOR_BOTTOM";
-// 音乐常量：新增两个基准点，它们只用于跟踪，不发声 (midi: 0)
 const TARGET_NOTES_WITH_ANCHORS = [
-    { name: ANCHOR_TOP_NAME, midi: 0 },   // 顶部基准点
+    { name: ANCHOR_TOP_NAME, midi: 0 },   
     { name: "C4", midi: 60 }, 
     { name: "D4", midi: 62 }, 
     { name: "E4", midi: 64 }, 
@@ -43,13 +41,14 @@ const TARGET_NOTES_WITH_ANCHORS = [
     { name: "A5", midi: 81 }, 
     { name: "C6", midi: 84 },
     { name: "B6", midi: 95 },
-    { name: ANCHOR_BOTTOM_NAME, midi: 0 } // 底部基准点
+    { name: ANCHOR_BOTTOM_NAME, midi: 0 } 
 ];
-const NUM_REGIONS = TARGET_NOTES_WITH_ANCHORS.length; // 总共 17 个区域
+const NUM_REGIONS = TARGET_NOTES_WITH_ANCHORS.length; 
 
-let PITCH_MAP = {};     
-let GRID_LINES = {};    
-
+let PITCH_MAP = {}; 
+// 缓存上一次的基准点Y坐标，用于丢失基准点时保持稳定
+let lastTopY = null;
+let lastBottomY = null;
 
 // --- 辅助函数 (保持不变) ---
 
@@ -70,26 +69,31 @@ function arraysEqual(a, b) {
 // 🎯 动态网格映射函数 (基于实际检测到的 Y 坐标)
 function createDynamicGridMap(topY, bottomY, canvasHeight) {
     
-    // 如果没有检测到基准点，使用上次的或默认值
-    const fixedTopY = topY !== null ? topY : 10;
-    const fixedBottomY = bottomY !== null ? bottomY : canvasHeight - 10;
+    // 如果是第一次调用或者基准点丢失，使用缓存或默认值
+    const fixedTopY = topY !== null ? topY : (lastTopY !== null ? lastTopY : 10);
+    const fixedBottomY = bottomY !== null ? bottomY : (lastBottomY !== null ? lastBottomY : canvasHeight - 10);
     
-    // 实际音阶区域总高度
+    // 如果成功检测到，更新缓存
+    if (topY !== null && bottomY !== null) {
+        lastTopY = fixedTopY;
+        lastBottomY = fixedBottomY;
+    }
+    
+    if (fixedBottomY <= fixedTopY + 5) { // 避免高度过小导致错误
+        return;
+    }
+    
     const actualHeight = fixedBottomY - fixedTopY;
-    
-    // 实际每个区域的高度 (17 个区域)
-    const actualStepHeight = actualHeight / (NUM_REGIONS - 1); // 区域之间有 NUM_REGIONS - 1 个间隔
+    const actualStepHeight = actualHeight / (NUM_REGIONS - 1); 
     
     const pitchMap = {};
     
     for (let i = 0; i < NUM_REGIONS; i++) {
         const note = TARGET_NOTES_WITH_ANCHORS[i];
         
-        // 计算当前区域的顶部、中部和底部 Y 坐标
         const line_y = fixedTopY + (i * actualStepHeight);
         const center_y = line_y + (actualStepHeight / 2);
         
-        // 只有非基准点才需要发声信息
         const frequency = note.midi !== 0 ? getFreqFromMidi(note.midi) : 0;
 
         pitchMap[Math.round(center_y)] = {
@@ -102,11 +106,10 @@ function createDynamicGridMap(topY, bottomY, canvasHeight) {
     }
     
     PITCH_MAP = pitchMap;
-    // 不再需要 GRID_LINES，因为网格是动态生成的
 }
 
 
-// --- 初始化、控制和发声 (保持不变) ---
+// --- 初始化、控制和发声 (修改 ROI 初始化) ---
 
 function onOpenCvLoaded() {
     statusElement.innerHTML = 'OpenCV 加载完毕，请点击开始按钮。';
@@ -150,13 +153,14 @@ function initCameraAndAudio() {
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
                 
+                // 🎯 固定 ROI X 轴位置在屏幕中心
+                fixedROI_X = canvas.width / 2 - ROI_W / 2;
+                
                 // 初始网格映射：使用默认值 (10 和 height-10)
                 createDynamicGridMap(null, null, canvas.height); 
                 
                 cap = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
                 src = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC1);
-                
-                currentROI_X = canvas.width / 2 - ROI_W / 2;
                 
                 statusElement.innerHTML = '摄像头就绪，开始识别...';
                 isProcessing = true;
@@ -238,7 +242,7 @@ function playNotes(frequencies) {
 }
 
 
-// --- 实时图像处理循环 (实现动态 Y 轴校正) ---
+// --- 实时图像处理循环 (合并和简化逻辑) ---
 
 function processVideo() {
     if (!isProcessing) return;
@@ -262,11 +266,12 @@ function processVideo() {
     let hierarchy = new cv.Mat();
     cv.findContours(src, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE); 
     
-    let detectedCenterXs = []; // 🎯 用于 X 轴跟踪
-    let topAnchorYs = [];       // 🎯 用于 Y 轴校正
-    let bottomAnchorYs = [];    // 🎯 用于 Y 轴校正
+    let topAnchorYs = [];       
+    let bottomAnchorYs = [];    
+    let currentPitches = []; 
+    let currentNoteNames = [];
     
-    // 3. 遍历轮廓并进行严格筛选，同时收集 X/Y 轴跟踪数据
+    // 3. 遍历轮廓并进行所有识别和收集
     for (let i = 0; i < contours.size(); ++i) {
         let contour = contours.get(i);
         let area = cv.contourArea(contour);
@@ -278,11 +283,13 @@ function processVideo() {
 
         let rect = cv.boundingRect(contour);
         
-        // 形状过滤 (长宽比和圆度)
+        // 形状过滤 (长宽比)
         const aspectRatio = rect.width / rect.height;
         if (aspectRatio < 0.5 || aspectRatio > 2.0) {
             continue;
         }
+        
+        // 形状过滤 (圆度)
         let hull = new cv.Mat();
         cv.convexHull(contour, hull);
         const hullArea = cv.contourArea(hull);
@@ -294,19 +301,30 @@ function processVideo() {
         let center_x = rect.x + rect.width / 2;
         let center_y = rect.y + rect.height / 2;
         
-        // 🎯 收集 X 轴跟踪数据 (所有合格圆点)
-        detectedCenterXs.push(center_x); 
-
-        // 🎯 收集 Y 轴基准点数据
-        for (const key in PITCH_MAP) {
-            const pitchInfo = PITCH_MAP[key];
-            if (center_y >= pitchInfo.minY && center_y < pitchInfo.maxY) {
-                if (pitchInfo.name === ANCHOR_TOP_NAME) {
-                    topAnchorYs.push(center_y);
-                    break;
-                } else if (pitchInfo.name === ANCHOR_BOTTOM_NAME) {
-                    bottomAnchorYs.push(center_y);
-                    break;
+        // 🎯 仅检查是否在固定的中央 ROI 内
+        if (center_x >= fixedROI_X && center_x <= fixedROI_X + ROI_W) {
+            
+            // 识别成功的圆点显示为蓝色
+            cv.circle(cap, new cv.Point(center_x, center_y), 5, [255, 0, 0, 255], -1); 
+            
+            // 识别音高和基准点
+            for (const key in PITCH_MAP) {
+                const pitchInfo = PITCH_MAP[key];
+                
+                if (center_y >= pitchInfo.minY && center_y < pitchInfo.maxY) {
+                    if (pitchInfo.name === ANCHOR_TOP_NAME) {
+                        topAnchorYs.push(center_y);
+                        // 发现基准点后，不再将其识别为音符
+                        break; 
+                    } else if (pitchInfo.name === ANCHOR_BOTTOM_NAME) {
+                        bottomAnchorYs.push(center_y);
+                        break; 
+                    } else {
+                        // 识别音符
+                        currentPitches.push(pitchInfo.freq);
+                        currentNoteNames.push(pitchInfo.name);
+                        break; 
+                    }
                 }
             }
         }
@@ -316,61 +334,36 @@ function processVideo() {
     let newTopY = null;
     let newBottomY = null;
     
-    // 平滑 Y 轴基准点
+    // 平滑 Y 轴基准点（简单平均，不需要帧间平滑，因为 createDynamicGridMap 会处理稳定性）
     if (topAnchorYs.length > 0) {
-        const avgTopY = topAnchorYs.reduce((a, b) => a + b, 0) / topAnchorYs.length;
-        // 使用一个简单的平滑逻辑，确保平滑地跟随 Y 轴变化
-        newTopY = avgTopY; 
+        newTopY = topAnchorYs.reduce((a, b) => a + b, 0) / topAnchorYs.length;
     }
     if (bottomAnchorYs.length > 0) {
-        const avgBottomY = bottomAnchorYs.reduce((a, b) => a + b, 0) / bottomAnchorYs.length;
-        newBottomY = avgBottomY;
+        newBottomY = bottomAnchorYs.reduce((a, b) => a + b, 0) / bottomAnchorYs.length;
     }
     
-    // 如果成功检测到两个基准点，则使用动态校正
-    if (newTopY !== null && newBottomY !== null && newBottomY > newTopY) {
-        createDynamicGridMap(newTopY, newBottomY, canvas.height);
-    } 
-    // 否则，保持上一次的映射 (PITCH_MAP 不变)
-
-
-    // 5. 🎯 X 轴跟踪：计算和更新 ROI 位置 (与上个版本相同)
-    
-    if (detectedCenterXs.length > 0) {
-        const sumX = detectedCenterXs.reduce((a, b) => a + b, 0);
-        const averageX = sumX / detectedCenterXs.length;
-        
-        const newROI_X = averageX - ROI_W / 2;
-        
-        currentROI_X = (ROI_SMOOTH_FACTOR * newROI_X) + ((1 - ROI_SMOOTH_FACTOR) * currentROI_X);
-        
-        if (currentROI_X < 0) currentROI_X = 0;
-        if (currentROI_X + ROI_W > canvas.width) currentROI_X = canvas.width - ROI_W;
-
-    } else if (lastDetectedPitches.length === 0) {
-        const targetCenter = canvas.width / 2 - ROI_W / 2;
-        currentROI_X = (0.005 * targetCenter) + (0.995 * currentROI_X);
+    // 动态更新网格
+    if (PITCH_MAP) {
+         createDynamicGridMap(newTopY, newBottomY, canvas.height);
     }
     
     
-    // 6. 绘制动态 ROI 和中线
+    // 5. 绘制固定的 ROI 和中线
     
-    // 绘制动态 ROI 框 (绿色)
-    cv.rectangle(cap, new cv.Point(currentROI_X, 0), new cv.Point(currentROI_X + ROI_W, canvas.height), [0, 255, 0, 255], 2);
+    // 绘制固定的中央 ROI 框 (绿色)
+    cv.rectangle(cap, new cv.Point(fixedROI_X, 0), new cv.Point(fixedROI_X + ROI_W, canvas.height), [0, 255, 0, 255], 2);
     
     let keys = Object.keys(PITCH_MAP).map(Number).sort((a, b) => a - b);
-    let currentNoteNames = [];
-    let currentPitches = []; 
-
+    
     // 绘制中线和音符名称 (使用动态 PITCH_MAP)
     for (let i = 0; i < NUM_REGIONS; i++) {
         const pitchInfo = PITCH_MAP[keys[i]];
 
         if (pitchInfo) {
-            // 绘制中线 (基准点线用淡蓝色)
+            // 绘制中线 (基准点线用橙色/蓝色，音符线用红色)
             let lineColor = (pitchInfo.name === ANCHOR_TOP_NAME || pitchInfo.name === ANCHOR_BOTTOM_NAME) 
-                            ? [255, 100, 0, 255] // 橙色/蓝色用于基准点
-                            : [0, 0, 255, 255];  // 红色用于音符线
+                            ? [255, 100, 0, 255] 
+                            : [0, 0, 255, 255]; 
             
             cv.line(cap, 
                 new cv.Point(0, pitchInfo.midY), 
@@ -379,7 +372,7 @@ function processVideo() {
                 1
             );
             
-            // 绘制音符名称 (基准点名称用灰色)
+            // 绘制音符名称 
             let nameColor = (pitchInfo.name === ANCHOR_TOP_NAME || pitchInfo.name === ANCHOR_BOTTOM_NAME)
                             ? [150, 150, 150, 255]
                             : [255, 0, 0, 255];
@@ -388,61 +381,8 @@ function processVideo() {
         }
     }
 
-    // 7. 第三次遍历轮廓：根据新的 ROI 和动态 Y 轴识别音高
     
-    // ⚠️ 重新查找轮廓以确保所有点的内存都已释放
-    contours.delete();
-    hierarchy.delete();
-    contours = new cv.MatVector();
-    hierarchy = new cv.Mat();
-    cv.findContours(src, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE); 
-    
-    
-    // 遍历轮廓并使用动态 ROI 和动态 Y 轴区域进行识别
-    for (let i = 0; i < contours.size(); ++i) {
-        let contour = contours.get(i);
-        let area = cv.contourArea(contour);
-
-        // 沿用之前的严格过滤条件
-        let rect = cv.boundingRect(contour);
-        const aspectRatio = rect.width / rect.height;
-        if (area < 100 || area > 4000 || aspectRatio < 0.5 || aspectRatio > 2.0) {
-            continue;
-        }
-        let hull = new cv.Mat();
-        cv.convexHull(contour, hull);
-        const hullArea = cv.contourArea(hull);
-        hull.delete(); 
-        if (hullArea === 0 || area / hullArea < 0.8) {
-             continue;
-        }
-        
-        let center_x = rect.x + rect.width / 2;
-        let center_y = rect.y + rect.height / 2;
-
-        // 🎯 使用动态 currentROI_X 进行 ROI 检查
-        if (center_x >= currentROI_X && center_x <= currentROI_X + ROI_W) {
-            
-            // 识别成功的圆点显示为蓝色
-            cv.circle(cap, new cv.Point(center_x, center_y), 5, [255, 0, 0, 255], -1); 
-
-            // 🎯 使用动态 PITCH_MAP 进行音高识别
-            for (const key in PITCH_MAP) {
-                const pitchInfo = PITCH_MAP[key];
-                
-                // 忽略基准点，只识别音符
-                if (pitchInfo.midi === 0) continue; 
-                
-                if (center_y >= pitchInfo.minY && center_y < pitchInfo.maxY) {
-                    currentPitches.push(pitchInfo.freq);
-                    currentNoteNames.push(pitchInfo.name);
-                    break; 
-                }
-            }
-        }
-    }
-    
-    // 8. 发声逻辑 (保持不变)
+    // 6. 发声逻辑 (保持不变)
     const uniquePitches = Array.from(new Set(currentPitches)); 
     const uniqueNames = Array.from(new Set(currentNoteNames));
     
@@ -461,7 +401,7 @@ function processVideo() {
     }
 
 
-    // 9. 输出图像和清理 
+    // 7. 输出图像和清理 
     cv.imshow('canvasOutput', cap);
 
     contours.delete();
